@@ -65,17 +65,17 @@ jobs:
 
       - name: Install doc automation dependencies
         if: steps.check-form.outputs.should_publish == 'true'
-        run: npm install @anthropic-ai/sdk docx mammoth axios dotenv adm-zip
+        run: npm install openai docx mammoth axios dotenv adm-zip
 
       # Call Claude API → generate DOCX using template
       - name: Generate documentation with Claude AI
         if: steps.check-form.outputs.should_publish == 'true'
         id: generate
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          DOC_TYPE:          ${{ steps.check-form.outputs.doc_type }}
-          DOC_TITLE:         ${{ steps.check-form.outputs.doc_title }}
-          CHANGED_FILES:     ${{ steps.changed-files.outputs.files }}
+          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          DOC_TYPE:      ${{ steps.check-form.outputs.doc_type }}
+          DOC_TITLE:     ${{ steps.check-form.outputs.doc_title }}
+          CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
         run: node generate-with-ai.js
 
       # Upload the DOCX so you can download and review it before approving
@@ -116,7 +116,7 @@ jobs:
           node-version: '18'
 
       - name: Install doc automation dependencies
-        run: npm install @anthropic-ai/sdk docx mammoth axios dotenv adm-zip
+        run: npm install openai docx mammoth axios dotenv adm-zip
 
       # Publish the DOCX to Confluence as a new page
       - name: Publish to Confluence

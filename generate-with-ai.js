@@ -1,5 +1,5 @@
 require('dotenv').config();
-const Anthropic = require('@anthropic-ai/sdk');
+const OpenAI = require('openai');
 const fs = require('fs');
 const path = require('path');
 
@@ -20,8 +20,8 @@ const TEMPLATES = {
 };
 
 async function main() {
-    const docType     = (process.env.DOC_TYPE  || '').toLowerCase().trim();
-    const docTitle    = (process.env.DOC_TITLE || '').trim();
+    const docType      = (process.env.DOC_TYPE     || '').toLowerCase().trim();
+    const docTitle     = (process.env.DOC_TITLE    || '').trim();
     const changedFiles = (process.env.CHANGED_FILES || '').trim();
 
     if (!docType || !docTitle) {
@@ -56,16 +56,19 @@ async function main() {
         process.exit(0);
     }
 
-    // Read the full generate-docx.js so Claude can see the exact template function
+    // Read generate-docx.js so the LLM can see the exact template function
     const generateDocxSource = fs.readFileSync(path.join(__dirname, 'generate-docx.js'), 'utf8');
 
-    // Call Claude API
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    // GitHub Models client — uses GITHUB_TOKEN automatically, completely free
+    const client = new OpenAI({
+        baseURL: 'https://models.inference.ai.azure.com',
+        apiKey: process.env.GITHUB_TOKEN
+    });
 
-    console.log(`\nCalling Claude API to generate ${docType} documentation...`);
+    console.log(`\nCalling GitHub Models (gpt-4o) to generate ${docType} documentation...`);
 
-    const response = await client.messages.create({
-        model: 'claude-opus-4-7',
+    const response = await client.chat.completions.create({
+        model: 'gpt-4o',
         max_tokens: 4096,
         messages: [{
             role: 'user',
@@ -95,26 +98,25 @@ Rules:
         }]
     });
 
-    // Parse JSON from Claude's response
+    // Parse JSON from response
     let docData;
-    const responseText = response.content[0].text.trim();
+    const responseText = response.choices[0].message.content.trim();
 
     try {
-        // Strip markdown code fences if Claude wrapped the JSON
         const cleaned = responseText
             .replace(/^```(?:json)?\s*/m, '')
             .replace(/\s*```\s*$/m, '')
             .trim();
         docData = JSON.parse(cleaned);
     } catch (e) {
-        console.error('Failed to parse Claude response as JSON.');
+        console.error('Failed to parse LLM response as JSON.');
         console.error('Response received:', responseText);
         process.exit(1);
     }
 
     // Build output path
-    const safeTitle = docTitle.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, '-');
-    const outputDir  = 'generated-docs';
+    const safeTitle     = docTitle.replace(/[^a-zA-Z0-9\s\-]/g, '').replace(/\s+/g, '-');
+    const outputDir     = 'generated-docs';
     const outputFilename = `${outputDir}/${safeTitle}.docx`;
 
     if (!fs.existsSync(outputDir)) {
