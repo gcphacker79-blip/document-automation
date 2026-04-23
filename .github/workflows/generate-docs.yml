@@ -6,6 +6,10 @@ on:
     branches:
       - release-*
 
+permissions:
+  contents: read
+  models: read
+
 jobs:
   # ─────────────────────────────────────────────
   # JOB 1: Read changed files, call Claude, generate DOCX
