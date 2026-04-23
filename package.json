@@ -1,0 +1,27 @@
+{
+  "name": "document-automation",
+  "version": "1.0.0",
+  "description": "Automate document processing and SOP generation from DOCX files",
+  "main": "publish_sop_to_confluence.js",
+  "scripts": {
+    "start": "node publish_sop_to_confluence.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "document",
+    "automation",
+    "docx",
+    "markdown",
+    "confluence"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "adm-zip": "^0.5.10",
+    "axios": "^1.6.0",
+    "docx": "^9.6.1",
+    "dotenv": "^16.3.1",
+    "mammoth": "^1.12.0"
+  }
+}

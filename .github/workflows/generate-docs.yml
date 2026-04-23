@@ -1,0 +1,131 @@
+name: Generate Documentation
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - release-*
+
+jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: Read changed files, call Claude, generate DOCX
+  # ─────────────────────────────────────────────
+  generate-docs:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      docx_file:      ${{ steps.generate.outputs.docx_file }}
+      doc_title:      ${{ steps.generate.outputs.doc_title }}
+      should_publish: ${{ steps.check-form.outputs.should_publish }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Read DOC_TYPE and DOC_TITLE from the PR description form
+      - name: Check PR form
+        id: check-form
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          DOC_TYPE=$(echo "$PR_BODY" | tr -d '\r' | grep -i "^DOC_TYPE:" | sed 's/^[^:]*://' | tr -d ' ' | tr '[:upper:]' '[:lower:]' | head -1)
+          DOC_TITLE=$(echo "$PR_BODY" | tr -d '\r' | grep -i "^DOC_TITLE:" | sed 's/^[^:]*://' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | head -1)
+
+          echo "Detected DOC_TYPE : '$DOC_TYPE'"
+          echo "Detected DOC_TITLE: '$DOC_TITLE'"
+
+          if [ -z "$DOC_TYPE" ]; then
+            echo "DOC_TYPE is empty — this is a bug fix or no documentation needed. Skipping."
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+            echo "doc_type=$DOC_TYPE"   >> $GITHUB_OUTPUT
+            echo "doc_title=$DOC_TITLE" >> $GITHUB_OUTPUT
+          fi
+
+      # Get list of files changed in this PR
+      - name: Get changed files
+        if: steps.check-form.outputs.should_publish == 'true'
+        id: changed-files
+        run: |
+          FILES=$(git diff --name-only \
+            ${{ github.event.pull_request.base.sha }} \
+            ${{ github.event.pull_request.head.sha }} \
+            | tr '\n' ',')
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+          echo "Changed files: $FILES"
+
+      - name: Setup Node.js
+        if: steps.check-form.outputs.should_publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install doc automation dependencies
+        if: steps.check-form.outputs.should_publish == 'true'
+        run: npm install @anthropic-ai/sdk docx mammoth axios dotenv adm-zip
+
+      # Call Claude API → generate DOCX using template
+      - name: Generate documentation with Claude AI
+        if: steps.check-form.outputs.should_publish == 'true'
+        id: generate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DOC_TYPE:          ${{ steps.check-form.outputs.doc_type }}
+          DOC_TITLE:         ${{ steps.check-form.outputs.doc_title }}
+          CHANGED_FILES:     ${{ steps.changed-files.outputs.files }}
+        run: node generate-with-ai.js
+
+      # Upload the DOCX so you can download and review it before approving
+      - name: Upload DOCX for review
+        if: steps.check-form.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation-pr-${{ github.event.pull_request.number }}
+          path: generated-docs/
+          retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # JOB 2: Wait for your approval → publish to Confluence
+  # This job is paused until you approve in GitHub Actions UI
+  # ─────────────────────────────────────────────
+  publish-to-confluence:
+    needs: generate-docs
+    if: >
+      needs.generate-docs.result == 'success' &&
+      needs.generate-docs.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    environment: confluence-production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Download the same DOCX that was generated in Job 1
+      - name: Download DOCX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: documentation-pr-${{ github.event.pull_request.number }}
+          path: generated-docs/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install doc automation dependencies
+        run: npm install @anthropic-ai/sdk docx mammoth axios dotenv adm-zip
+
+      # Publish the DOCX to Confluence as a new page
+      - name: Publish to Confluence
+        env:
+          CONFLUENCE_BASE_URL:       ${{ secrets.CONFLUENCE_BASE_URL }}
+          CONFLUENCE_USER:           ${{ secrets.CONFLUENCE_USER }}
+          CONFLUENCE_API_TOKEN:      ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_SPACE_KEY:      ${{ secrets.CONFLUENCE_SPACE_KEY }}
+          CONFLUENCE_PARENT_PAGE_ID: ${{ secrets.CONFLUENCE_PARENT_PAGE_ID }}
+          DOCX_FILE:                 ${{ needs.generate-docs.outputs.docx_file }}
+          TITLE:                     ${{ needs.generate-docs.outputs.doc_title }}
+        run: node publish_sop_to_confluence.js --mode publish
