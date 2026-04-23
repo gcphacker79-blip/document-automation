@@ -56,8 +56,18 @@ async function main() {
         process.exit(0);
     }
 
-    // Read generate-docx.js so the LLM can see the exact template function
+    // Extract only the specific template function — not the full file
     const generateDocxSource = fs.readFileSync(path.join(__dirname, 'generate-docx.js'), 'utf8');
+    const templateFunctionCode = extractFunction(generateDocxSource, template.name);
+
+    // Truncate large code files to keep token count low
+    const truncatedSnippets = codeSnippets.map(snippet => {
+        const lines = snippet.split('\n');
+        if (lines.length > 80) {
+            return lines.slice(0, 80).join('\n') + '\n... (truncated)';
+        }
+        return snippet;
+    });
 
     // GitHub Models client — uses GITHUB_TOKEN automatically, completely free
     const client = new OpenAI({
@@ -69,32 +79,22 @@ async function main() {
 
     const response = await client.chat.completions.create({
         model: 'gpt-4o',
-        max_tokens: 4096,
+        max_tokens: 2048,
         messages: [{
             role: 'user',
-            content: `You are a senior technical writer. Your job is to generate documentation for a software feature based on its code.
+            content: `You are a senior technical writer. Generate documentation for a software feature based on its code.
 
-Here are the code files that were added or modified in this feature:
+Code files changed in this feature:
+${truncatedSnippets.join('\n\n')}
 
-${codeSnippets.join('\n\n')}
-
-Here is the documentation template file that will be used to generate the DOCX document:
-
+Template function to use:
 \`\`\`javascript
-${generateDocxSource}
+${templateFunctionCode}
 \`\`\`
 
-Your task:
-1. Read the code files carefully and understand what the feature does.
-2. Look at the function "${template.name}" in the template file above.
-3. Understand exactly what fields/structure the second argument (data object) of that function expects.
-4. Generate a complete, detailed documentation data object based on the actual code.
-
-Rules:
-- Every field must have real, meaningful content derived from the code — not placeholder text.
-- Arrays must have at least 2-3 items.
-- Table objects must have "headers" (array of strings) and "rows" (array of arrays of strings).
-- Return ONLY the raw JSON object — no explanation, no markdown, no code blocks.`
+Read the code and generate the data object that "${template.name}" expects as its second argument.
+Every field must have real content from the code. Arrays need 2-3 items. Tables need "headers" and "rows".
+Return ONLY raw JSON — no explanation, no markdown.`
         }]
     });
 
@@ -142,6 +142,24 @@ Rules:
     }
 
     console.log(`\n✓ Documentation generated successfully: ${outputFilename}`);
+}
+
+function extractFunction(source, functionName) {
+    const startIndex = source.indexOf(`function ${functionName}`);
+    if (startIndex === -1) return source;
+
+    let braceCount = 0;
+    let started = false;
+    let endIndex = startIndex;
+
+    for (let i = startIndex; i < source.length; i++) {
+        if (source[i] === '{') { braceCount++; started = true; }
+        else if (source[i] === '}') {
+            braceCount--;
+            if (started && braceCount === 0) { endIndex = i + 1; break; }
+        }
+    }
+    return source.substring(startIndex, endIndex);
 }
 
 main().catch(err => {
