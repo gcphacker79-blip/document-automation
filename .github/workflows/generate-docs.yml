@@ -8,7 +8,7 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────
-  # JOB 1: Read changed files, call Claude, generate DOCX
+  # JOB 1: Read changed files, call LLM, generate DOCX
   # ─────────────────────────────────────────────
   generate-docs:
     if: github.event.pull_request.merged == true
@@ -16,7 +16,7 @@ jobs:
     outputs:
       docx_file:      ${{ steps.generate.outputs.docx_file }}
       doc_title:      ${{ steps.generate.outputs.doc_title }}
-      should_publish: ${{ steps.check-form.outputs.should_publish }}
+      should_publish: ${{ steps.check-label.outputs.should_publish }}
 
     steps:
       - name: Checkout repository
@@ -24,30 +24,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Read DOC_TYPE and DOC_TITLE from the PR description form
-      - name: Check PR form
-        id: check-form
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
+      # Check PR labels for doc type — PR title becomes the doc title
+      - name: Check PR label
+        id: check-label
         run: |
-          DOC_TYPE=$(echo "$PR_BODY" | tr -d '\r' | grep -i "^DOC_TYPE:" | sed 's/^[^:]*://' | tr -d ' ' | tr '[:upper:]' '[:lower:]' | head -1)
-          DOC_TITLE=$(echo "$PR_BODY" | tr -d '\r' | grep -i "^DOC_TITLE:" | sed 's/^[^:]*://' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | head -1)
+          LABELS="${{ join(github.event.pull_request.labels.*.name, ',') }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
 
-          echo "Detected DOC_TYPE : '$DOC_TYPE'"
-          echo "Detected DOC_TITLE: '$DOC_TITLE'"
+          echo "Labels on PR : '$LABELS'"
+          echo "PR Title     : '$PR_TITLE'"
+
+          DOC_TYPE=$(echo "$LABELS" | grep -oP 'doc:\K\w+' | head -1)
 
           if [ -z "$DOC_TYPE" ]; then
-            echo "DOC_TYPE is empty — this is a bug fix or no documentation needed. Skipping."
+            echo "No doc label found — bug fix or no documentation needed. Skipping."
             echo "should_publish=false" >> $GITHUB_OUTPUT
           else
-            echo "should_publish=true" >> $GITHUB_OUTPUT
-            echo "doc_type=$DOC_TYPE"   >> $GITHUB_OUTPUT
-            echo "doc_title=$DOC_TITLE" >> $GITHUB_OUTPUT
+            echo "Doc Type  : '$DOC_TYPE'"
+            echo "Doc Title : '$PR_TITLE'"
+            echo "should_publish=true"    >> $GITHUB_OUTPUT
+            echo "doc_type=$DOC_TYPE"     >> $GITHUB_OUTPUT
+            echo "doc_title=$PR_TITLE"    >> $GITHUB_OUTPUT
           fi
 
       # Get list of files changed in this PR
       - name: Get changed files
-        if: steps.check-form.outputs.should_publish == 'true'
+        if: steps.check-label.outputs.should_publish == 'true'
         id: changed-files
         run: |
           FILES=$(git diff --name-only \
@@ -58,29 +60,29 @@ jobs:
           echo "Changed files: $FILES"
 
       - name: Setup Node.js
-        if: steps.check-form.outputs.should_publish == 'true'
+        if: steps.check-label.outputs.should_publish == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
       - name: Install doc automation dependencies
-        if: steps.check-form.outputs.should_publish == 'true'
+        if: steps.check-label.outputs.should_publish == 'true'
         run: npm install openai docx mammoth axios dotenv adm-zip
 
-      # Call Claude API → generate DOCX using template
-      - name: Generate documentation with Claude AI
-        if: steps.check-form.outputs.should_publish == 'true'
+      # Call GitHub Models (GPT-4o) → generate DOCX using template
+      - name: Generate documentation with GitHub Models
+        if: steps.check-label.outputs.should_publish == 'true'
         id: generate
         env:
           GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
-          DOC_TYPE:      ${{ steps.check-form.outputs.doc_type }}
-          DOC_TITLE:     ${{ steps.check-form.outputs.doc_title }}
+          DOC_TYPE:      ${{ steps.check-label.outputs.doc_type }}
+          DOC_TITLE:     ${{ steps.check-label.outputs.doc_title }}
           CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
         run: node generate-with-ai.js
 
-      # Upload the DOCX so you can download and review it before approving
+      # Upload DOCX so you can download and review before approving
       - name: Upload DOCX for review
-        if: steps.check-form.outputs.should_publish == 'true'
+        if: steps.check-label.outputs.should_publish == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: documentation-pr-${{ github.event.pull_request.number }}
@@ -88,8 +90,8 @@ jobs:
           retention-days: 30
 
   # ─────────────────────────────────────────────
-  # JOB 2: Wait for your approval → publish to Confluence
-  # This job is paused until you approve in GitHub Actions UI
+  # JOB 2: Wait for approval → publish to Confluence
+  # Paused until you approve in GitHub Actions UI
   # ─────────────────────────────────────────────
   publish-to-confluence:
     needs: generate-docs
@@ -103,7 +105,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Download the same DOCX that was generated in Job 1
+      # Download the DOCX generated in Job 1
       - name: Download DOCX artifact
         uses: actions/download-artifact@v4
         with:
@@ -118,7 +120,7 @@ jobs:
       - name: Install doc automation dependencies
         run: npm install openai docx mammoth axios dotenv adm-zip
 
-      # Publish the DOCX to Confluence as a new page
+      # Publish DOCX to Confluence as a new page
       - name: Publish to Confluence
         env:
           CONFLUENCE_BASE_URL:       ${{ secrets.CONFLUENCE_BASE_URL }}
